@@ -1,0 +1,15 @@
+version: v5.0
+input:
+  threat_score_threshold: 0.85
+  fail_open: true
+output:
+  terminate_on_leak: false
+  detectors:
+    - email
+    - phone
+    - api_key
+    - credit_card
+logging:
+  queue_size: 1000
+  workers: 20
+  fail_open: true

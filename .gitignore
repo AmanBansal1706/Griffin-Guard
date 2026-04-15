@@ -1,0 +1,39 @@
+# Node / Next
+**/node_modules/
+**/.next/
+**/dist/
+**/build/
+
+# Python
+**/__pycache__/
+**/.pytest_cache/
+**/.venv/
+**/venv/
+*.pyc
+
+# Go
+**/bin/
+**/*.test
+**/coverage.out
+
+# Logs / temp
+*.log
+*.tmp
+*.swp
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local runtime artifacts
+var/

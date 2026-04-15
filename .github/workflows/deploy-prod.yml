@@ -1,0 +1,30 @@
+name: Deploy Prod
+on:
+  workflow_dispatch:
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform -chdir=infra/terraform/environments/prod init
+      - run: terraform -chdir=infra/terraform/environments/prod plan -out=tfplan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prod-tfplan
+          path: infra/terraform/environments/prod/tfplan
+
+  apply:
+    needs: plan
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/download-artifact@v4
+        with:
+          name: prod-tfplan
+          path: infra/terraform/environments/prod
+      - run: terraform -chdir=infra/terraform/environments/prod init
+      - run: terraform -chdir=infra/terraform/environments/prod apply tfplan
