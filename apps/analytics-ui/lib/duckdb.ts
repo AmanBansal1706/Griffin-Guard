@@ -87,25 +87,25 @@ function esc(v: string): string {
   return v.replaceAll("'", "''");
 }
 
-export async function syncLiveEvents(conn: AsyncDuckDBConnection, endpoint: string) {
+export async function syncLiveEvents(conn: AsyncDuckDBConnection, endpoint: string): Promise<"live" | "stale"> {
   let res: Response;
   try {
     res = await fetch(endpoint, { cache: "no-store" });
   } catch {
     // Proxy live endpoint unavailable; keep dashboard usable with local/parquet data.
-    return;
+    return "stale";
   }
   if (!res.ok) {
-    return;
+    return "stale";
   }
   let data: LiveEvent[];
   try {
     data = (await res.json()) as LiveEvent[];
   } catch {
-    return;
+    return "stale";
   }
   if (!Array.isArray(data) || data.length === 0) {
-    return;
+    return "stale";
   }
 
   for (const row of data) {
@@ -137,4 +137,5 @@ export async function syncLiveEvents(conn: AsyncDuckDBConnection, endpoint: stri
       )
     `);
   }
+  return "live";
 }

@@ -22,4 +22,44 @@ module "ecs_proxy" {
   upstream_url       = var.upstream_url
   subnet_ids         = var.subnet_ids
   security_group_ids = var.security_group_ids
+  secret_arns        = var.proxy_secret_arns
+}
+
+module "data_lake" {
+  source              = "../../modules/data-lake"
+  raw_bucket_name     = var.raw_bucket_name
+  curated_bucket_name = var.curated_bucket_name
+  lambda_arn          = var.pii_lambda_arn
+}
+
+resource "aws_cloudwatch_metric_alarm" "ecs_high_cpu" {
+  alarm_name          = "vipergo-prod-ecs-high-cpu"
+  namespace           = "AWS/ECS"
+  metric_name         = "CPUUtilization"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 5
+  threshold           = 80
+  comparison_operator = "GreaterThanThreshold"
+  alarm_description   = "Proxy service sustained CPU above 80% for 5 minutes."
+  dimensions = {
+    ClusterName = module.ecs_proxy.cluster_name
+    ServiceName = module.ecs_proxy.service_name
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "ecs_high_memory" {
+  alarm_name          = "vipergo-prod-ecs-high-memory"
+  namespace           = "AWS/ECS"
+  metric_name         = "MemoryUtilization"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 5
+  threshold           = 85
+  comparison_operator = "GreaterThanThreshold"
+  alarm_description   = "Proxy service sustained memory above 85% for 5 minutes."
+  dimensions = {
+    ClusterName = module.ecs_proxy.cluster_name
+    ServiceName = module.ecs_proxy.service_name
+  }
 }

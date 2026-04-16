@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"vipergo/apps/viper-proxy/internal/config"
 	"vipergo/apps/viper-proxy/internal/health"
 	"vipergo/apps/viper-proxy/internal/logging"
+	"vipergo/apps/viper-proxy/internal/metrics"
 	"vipergo/apps/viper-proxy/internal/middleware"
 	"vipergo/apps/viper-proxy/internal/proxy"
 	"vipergo/apps/viper-proxy/internal/security/input"
@@ -23,6 +25,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid config: %v", err)
+	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(), awsconfig.WithRegion(cfg.LogRegion))
 	if err != nil {
@@ -46,19 +51,47 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.Handle("/healthz", health.Handler(func() health.Status {
+	statusFn := func() health.Status {
+		degraded := !engine.IsReady() || !queue.Healthy()
 		return health.Status{
-			ProxyReady:   true,
-			ScannerReady: engine.IsReady() || cfg.ScannerFailOpen,
-			LoggerReady:  queue.Healthy(),
-			Version:      "v5.0",
+			ProxyReady:    true,
+			ScannerReady:  engine.IsReady() || cfg.ScannerFailOpen,
+			LoggerReady:   queue.Healthy(),
+			Degraded:      degraded,
+			QueueDepth:    queue.QueueDepth(),
+			QueueCapacity: queue.QueueCapacity(),
+			Version:       "v5.0",
 		}
+	}
+	mux.Handle("/healthz/public", health.Handler(func() health.Status {
+		s := statusFn()
+		s.QueueDepth = 0
+		s.QueueCapacity = 0
+		return s
 	}))
-	mux.HandleFunc("/debug/events", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+	mux.Handle("/healthz/operator", health.Handler(statusFn))
+	mux.Handle("/healthz", health.Handler(statusFn))
+	mux.HandleFunc("/debug/events", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !cfg.AllowDebugEvents {
+			http.Error(w, "debug endpoint disabled", http.StatusNotFound)
+			return
+		}
+		provided := r.Header.Get("X-Debug-Token")
+		if cfg.DebugEventsToken != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(cfg.DebugEventsToken)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		events := logging.SnapshotLiveEvents(500)
+		events := logging.SnapshotLiveEvents(cfg.DebugEventsMax)
 		_ = json.NewEncoder(w).Encode(events)
+	})
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(metrics.GetSnapshot())
 	})
 	mux.Handle("/", middleware.Recovery(middleware.RequestGuard(cfg.RequestMaxBytes, gw)))
 

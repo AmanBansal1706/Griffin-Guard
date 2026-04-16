@@ -18,6 +18,7 @@ jobs:
       - run: go fmt ./...
       - run: go vet ./...
       - run: go test ./...
+      - run: go test -race ./...
 
   python-services:
     runs-on: ubuntu-latest
@@ -27,9 +28,10 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install --upgrade pip
-      - run: pip install ruff
+      - run: pip install ruff pytest
       - run: ruff check services/pii-lambda/src services/parquet-compactor/src
       - run: python -m py_compile services/pii-lambda/src/*.py services/parquet-compactor/src/*.py
+      - run: pytest services/pii-lambda/tests services/parquet-compactor/tests
 
   analytics-ui:
     runs-on: ubuntu-latest
@@ -44,7 +46,9 @@ jobs:
           cache: "npm"
           cache-dependency-path: apps/analytics-ui/package.json
       - run: npm install
-      - run: npm run build
+      - run: npm audit --audit-level=high
+      - run: npm run test
+      - run: NEXT_DISABLE_ESLINT=1 npm run build
 
   terraform-validate:
     runs-on: ubuntu-latest

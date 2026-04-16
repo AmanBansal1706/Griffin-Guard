@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { RequestDetailDrawer } from "../components/dashboard/RequestDetailDrawer";
 import { KpiCard } from "../components/KpiCard";
 import { SidebarNav, type NavKey } from "../components/SidebarNav";
+import { Badge, Button, SectionHeader, SelectInput, TextInput } from "../components/ui/primitives";
 import { initDB, loadEventData, syncLiveEvents } from "../lib/duckdb";
 import { queryTemplates } from "../lib/queries";
 
@@ -79,6 +81,9 @@ export default function Page() {
   const [filterSeverity, setFilterSeverity] = useState<string>("all");
   const [rowsPerPage, setRowsPerPage] = useState<number>(10);
   const [page, setPage] = useState<number>(1);
+  const [dataSourceState, setDataSourceState] = useState<"live" | "stale" | "unknown">("unknown");
+  const [lastRefreshAt, setLastRefreshAt] = useState<string>("never");
+  const isRefreshingRef = useRef(false);
   const dataUrl = useMemo(() => process.env.NEXT_PUBLIC_CURATED_PARQUET_URL || "", []);
   const liveEventsUrl = useMemo(() => process.env.NEXT_PUBLIC_PROXY_EVENTS_URL || "http://localhost:18080/debug/events", []);
   const overviewRows = useMemo(() => parseRows(overview), [overview]);
@@ -143,11 +148,43 @@ export default function Page() {
   };
 
   useEffect(() => {
+    const persisted = localStorage.getItem("vipergo-dashboard-state");
+    if (persisted) {
+      try {
+        const state = JSON.parse(persisted) as { action?: string; severity?: string; rowsPerPage?: number; requestFilter?: string };
+        if (state.action) setFilterAction(state.action);
+        if (state.severity) setFilterSeverity(state.severity);
+        if (state.rowsPerPage) setRowsPerPage(state.rowsPerPage);
+        if (state.requestFilter) setRequestFilter(state.requestFilter);
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "vipergo-dashboard-state",
+      JSON.stringify({ action: filterAction, severity: filterSeverity, rowsPerPage, requestFilter })
+    );
+  }, [filterAction, filterSeverity, rowsPerPage, requestFilter]);
+
+  useEffect(() => {
     (async () => {
+      if (isRefreshingRef.current) {
+        return;
+      }
+      isRefreshingRef.current = true;
       try {
         const { conn } = await initDB();
         await loadEventData(conn, dataUrl || undefined);
-        await syncLiveEvents(conn, liveEventsUrl);
+        const source = await syncLiveEvents(conn, liveEventsUrl);
+        setDataSourceState(source);
+        setLastRefreshAt(new Date().toLocaleTimeString());
         const overviewResult = await conn.query(queryTemplates.overview);
         setOverview(safeJson(overviewResult.toArray()));
 
@@ -167,15 +204,29 @@ export default function Page() {
         setThreatTrend(safeJson(trendResult.toArray()));
       } catch (e) {
         setError(`Query error: ${String(e)}`);
+      } finally {
+        isRefreshingRef.current = false;
       }
     })();
   }, [activeTab, dataUrl, liveEventsUrl, refreshTick]);
 
   useEffect(() => {
     const t = setInterval(() => {
-      setRefreshTick((x) => x + 1);
-    }, 5000);
+      if (document.visibilityState === "visible") {
+        setRefreshTick((x) => x + 1);
+      }
+    }, 10000);
     return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSelectedRequest(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   useEffect(() => {
@@ -208,29 +259,22 @@ export default function Page() {
   };
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        padding: 24,
-        background: theme === "light" ? "linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)" : "linear-gradient(180deg, #0f172a 0%, #111827 100%)",
-        fontFamily: "Inter, Arial, sans-serif",
-        color: theme === "light" ? "#0f172a" : "#e5e7eb"
-      }}
-    >
-      <div style={{ maxWidth: 1300, margin: "0 auto", display: "grid", gridTemplateColumns: "240px 1fr", gap: 16 }}>
+    <main className="gg-shell">
+      <div className="gg-layout">
         <SidebarNav active={activeNav} onSelect={jumpTo} />
 
         <section>
-          <header style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 14, padding: 18, marginBottom: 14 }}>
-            <h1 style={{ margin: "0 0 6px 0" }}>ViperGo Security Analytics</h1>
-            <p style={{ margin: 0, color: "#64748b" }}>
-              Request-level AI firewall decisions, threat scoring, stream leak prevention, and incident visibility.
+          <header className="gg-card" style={{ padding: 20, marginBottom: 16 }}>
+            <h1 style={{ margin: 0, fontSize: 30 }}>Security Analytics Console</h1>
+            <p className="gg-muted" style={{ marginTop: 8, marginBottom: 0 }}>
+              Track AI firewall decisions, threat signals, output leak controls, and incident activity in one place.
             </p>
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))} style={{ padding: "6px 10px" }}>
-                Theme: {theme}
-              </button>
-              <button
+            <div className="gg-muted" style={{ marginTop: 10, fontSize: 12 }}>
+              Source: <strong>{dataSourceState}</strong> | Refreshed: <strong>{lastRefreshAt}</strong>
+            </div>
+            <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <Button onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}>Theme: {theme}</Button>
+              <Button
                 onClick={() => {
                   const rows = filteredDecisionRows;
                   const cols = ["timestamp", "request_id", "user_id", "action", "input_score", "output_leak", "pii_tag", "latency_ms"];
@@ -243,36 +287,37 @@ export default function Page() {
                   a.click();
                   URL.revokeObjectURL(url);
                 }}
-                style={{ padding: "6px 10px" }}
               >
                 Export CSV
-              </button>
+              </Button>
             </div>
           </header>
 
           {error ? (
-            <div style={{ padding: 12, border: "1px solid #d33", borderRadius: 8, background: "#fff5f5", marginBottom: 16 }}>{error}</div>
+            <div className="gg-card" style={{ padding: 12, marginBottom: 16, borderColor: "var(--status-danger-bg)" }}>
+              {error}
+            </div>
           ) : null}
 
           <section id="overview" ref={sectionRefs.overview} style={{ marginBottom: 16 }}>
-            <h2 style={{ marginBottom: 10 }}>Overview KPIs</h2>
+            <SectionHeader title="Overview KPIs" subtitle="Current performance and policy enforcement posture." />
             {overviewRows.length === 0 ? (
-              <div style={{ padding: 12, borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0" }}>No KPI data yet.</div>
+              <div className="gg-card" style={{ padding: 12 }}>No KPI data yet.</div>
             ) : (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-                <KpiCard title="Total Requests" value={String(totalRequests)} border="#e5e7eb" bg="#fff" accent="#6b7280" />
-                <KpiCard title="Blocked Requests" value={String(blockedRequests)} subtitle={`${blockRate.toFixed(1)}% of all traffic`} border="#fecaca" bg="#fff1f2" accent="#9f1239" />
-                <KpiCard title="Leak Events" value={String(leakEvents)} subtitle={`${leakRate.toFixed(1)}% leak rate`} border="#fde68a" bg="#fffbeb" accent="#92400e" />
-                <KpiCard title="Avg Latency" value={`${avgLatency.toFixed(1)}ms`} border="#bfdbfe" bg="#eff6ff" accent="#1d4ed8" />
+                <KpiCard title="Total Requests" value={String(totalRequests)} />
+                <KpiCard title="Blocked Requests" value={String(blockedRequests)} subtitle={`${blockRate.toFixed(1)}% of all traffic`} tone="danger" />
+                <KpiCard title="Leak Events" value={String(leakEvents)} subtitle={`${leakRate.toFixed(1)}% leak rate`} tone="warn" />
+                <KpiCard title="Avg Latency" value={`${avgLatency.toFixed(1)}ms`} tone="info" />
               </div>
             )}
           </section>
 
           <section id="trends" ref={sectionRefs.trends} style={{ marginBottom: 16, display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
-            <article style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+            <article className="gg-card" style={{ padding: 14 }}>
               <h3 style={{ margin: "0 0 10px 0" }}>Blocked Request Trend</h3>
               {trendRows.length === 0 ? (
-                <div style={{ color: "#64748b", fontSize: 13 }}>No trend points yet.</div>
+                <div className="gg-muted" style={{ fontSize: 13 }}>No trend points yet.</div>
               ) : (
                 <div style={{ width: "100%", height: 240 }}>
                   <ResponsiveContainer>
@@ -288,11 +333,11 @@ export default function Page() {
               )}
             </article>
 
-            <article style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+            <article className="gg-card" style={{ padding: 14 }}>
               <h3 style={{ margin: "0 0 10px 0" }}>Live Incident Feed</h3>
               <div style={{ display: "grid", gap: 8 }}>
                 {incidentFeed.length === 0 ? (
-                  <div style={{ color: "#64748b", fontSize: 13 }}>No active incidents.</div>
+                  <div className="gg-muted" style={{ fontSize: 13 }}>No active incidents.</div>
                 ) : (
                   incidentFeed.map((row, idx) => (
                     <button
@@ -300,16 +345,16 @@ export default function Page() {
                       onClick={() => setSelectedRequest(row)}
                       style={{
                         textAlign: "left",
-                        border: "1px solid #e2e8f0",
+                        border: "1px solid var(--border-default)",
                         borderRadius: 8,
-                        background: "#fff",
+                        background: "var(--bg-elevated)",
                         padding: 8,
                         cursor: "pointer"
                       }}
                     >
-                      <div style={{ fontSize: 12, color: "#64748b" }}>{formatValue(row.timestamp)}</div>
+                      <div className="gg-muted" style={{ fontSize: 12 }}>{formatValue(row.timestamp)}</div>
                       <div style={{ fontSize: 13, fontWeight: 700 }}>{formatValue(row.action)}</div>
-                      <div style={{ fontSize: 12, color: "#334155" }}>request: {formatValue(row.request_id)}</div>
+                      <div className="gg-muted" style={{ fontSize: 12 }}>Request: {formatValue(row.request_id)}</div>
                     </button>
                   ))
                 )}
@@ -318,45 +363,42 @@ export default function Page() {
           </section>
 
           <section id="explorer" ref={sectionRefs.explorer} style={{ marginBottom: 20 }}>
-            <h2 style={{ marginBottom: 8 }}>Request Explorer (What happened and why)</h2>
-            <p style={{ marginTop: 0, color: "#6b7280", fontSize: 14 }}>
-              Each row is one request decision. This shows who triggered it, what action was taken, the score, and why.
-            </p>
-            <input
+            <SectionHeader title="Request Explorer" subtitle="Filter, inspect, and investigate policy decisions." />
+            <TextInput
               placeholder="Filter by request id, user, or action..."
               value={requestFilter}
               onChange={(e) => setRequestFilter(e.target.value)}
-              style={{ width: "100%", maxWidth: 420, padding: "8px 10px", border: "1px solid #d1d5db", borderRadius: 8, marginBottom: 10 }}
+              style={{ maxWidth: 420, marginBottom: 10 }}
             />
             <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-              <select value={filterAction} onChange={(e) => { setFilterAction(e.target.value); setPage(1); }} style={{ padding: "8px 10px" }}>
+              <SelectInput value={filterAction} onChange={(e) => { setFilterAction(e.target.value); setPage(1); }} style={{ width: 180 }}>
                 <option value="all">Action: All</option>
                 <option value="allow">allow</option>
                 <option value="block_input">block_input</option>
                 <option value="redact_stream">redact_stream</option>
                 <option value="terminate_stream">terminate_stream</option>
-              </select>
-              <select value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); setPage(1); }} style={{ padding: "8px 10px" }}>
+              </SelectInput>
+              <SelectInput value={filterSeverity} onChange={(e) => { setFilterSeverity(e.target.value); setPage(1); }} style={{ width: 180 }}>
                 <option value="all">Severity: All</option>
                 <option value="SAFE">SAFE</option>
                 <option value="RED_FLAG">RED_FLAG</option>
                 <option value="CRITICAL">CRITICAL</option>
-              </select>
-              <select value={rowsPerPage} onChange={(e) => { setRowsPerPage(Number(e.target.value)); setPage(1); }} style={{ padding: "8px 10px" }}>
+              </SelectInput>
+              <SelectInput value={rowsPerPage} onChange={(e) => { setRowsPerPage(Number(e.target.value)); setPage(1); }} style={{ width: 130 }}>
                 <option value={10}>10 rows</option>
                 <option value={20}>20 rows</option>
                 <option value={50}>50 rows</option>
-              </select>
+              </SelectInput>
             </div>
             {filteredDecisionRows.length === 0 ? (
-              <div style={{ padding: 12, borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0" }}>No request records match this filter.</div>
+              <div className="gg-card" style={{ padding: 12 }}>No request records match this filter.</div>
             ) : (
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "auto", background: "#fff" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1050 }}>
-                  <thead style={{ background: "#f9fafb" }}>
+              <div className="gg-table-wrap">
+                <table className="gg-table" style={{ minWidth: 1050 }}>
+                  <thead>
                     <tr>
                       {["timestamp", "request_id", "user_id", "action", "input_score", "output_leak", "pii_tag", "latency_ms", "reason"].map((col) => (
-                        <th key={col} style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e5e7eb", fontSize: 13 }}>
+                        <th key={col}>
                           {col.replaceAll("_", " ")}
                         </th>
                       ))}
@@ -364,36 +406,17 @@ export default function Page() {
                   </thead>
                   <tbody>
                     {paginatedDecisionRows.map((row, idx) => {
-                      const action = String(row.action ?? "");
-                      const actionBg =
-                        action === "block_input"
-                          ? "#fee2e2"
-                          : action === "redact_stream"
-                            ? "#fef3c7"
-                            : action === "terminate_stream"
-                              ? "#fecaca"
-                              : "#dcfce7";
-                      const actionColor =
-                        action === "block_input" || action === "terminate_stream"
-                          ? "#991b1b"
-                          : action === "redact_stream"
-                            ? "#92400e"
-                            : "#166534";
                       return (
                         <tr key={idx} onClick={() => setSelectedRequest(row)} style={{ cursor: "pointer" }}>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>{formatValue(row.timestamp)}</td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>{formatValue(row.request_id)}</td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>{formatValue(row.user_id)}</td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>
-                            <span style={{ padding: "3px 8px", borderRadius: 999, background: actionBg, color: actionColor, fontWeight: 700 }}>
-                              {formatValue(row.action)}
-                            </span>
-                          </td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>{formatValue(row.input_score)}</td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>{formatValue(row.output_leak)}</td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>{formatValue(row.pii_tag)}</td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>{formatValue(row.latency_ms)}</td>
-                          <td style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13, maxWidth: 420 }}>{decisionReason(row)}</td>
+                          <td>{formatValue(row.timestamp)}</td>
+                          <td>{formatValue(row.request_id)}</td>
+                          <td>{formatValue(row.user_id)}</td>
+                          <td><Badge value={String(formatValue(row.action))} /></td>
+                          <td>{formatValue(row.input_score)}</td>
+                          <td>{formatValue(row.output_leak)}</td>
+                          <td>{formatValue(row.pii_tag)}</td>
+                          <td>{formatValue(row.latency_ms)}</td>
+                          <td style={{ maxWidth: 420 }}>{decisionReason(row)}</td>
                         </tr>
                       );
                     })}
@@ -406,18 +429,18 @@ export default function Page() {
                 Showing {(page - 1) * rowsPerPage + 1}-{Math.min(page * rowsPerPage, filteredDecisionRows.length)} of {filteredDecisionRows.length}
               </div>
               <div style={{ display: "flex", gap: 8 }}>
-                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} style={{ padding: "6px 10px" }}>Prev</button>
+                <Button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>Prev</Button>
                 <span style={{ fontSize: 13, alignSelf: "center" }}>Page {page} / {totalPages}</span>
-                <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} style={{ padding: "6px 10px" }}>Next</button>
+                <Button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next</Button>
               </div>
             </div>
           </section>
 
           <section style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-            <button onClick={() => setActiveTab("threats")} style={{ padding: "8px 12px" }}>Threat Trends</button>
-            <button onClick={() => setActiveTab("leaks")} style={{ padding: "8px 12px" }}>Leak Frequency</button>
-            <button onClick={() => setActiveTab("users")} style={{ padding: "8px 12px" }}>User Behavior</button>
-            <button onClick={() => setActiveTab("incidents")} style={{ padding: "8px 12px" }}>Critical Incidents</button>
+            <Button variant={activeTab === "threats" ? "primary" : "default"} onClick={() => setActiveTab("threats")}>Threat Trends</Button>
+            <Button variant={activeTab === "leaks" ? "primary" : "default"} onClick={() => setActiveTab("leaks")}>Leak Frequency</Button>
+            <Button variant={activeTab === "users" ? "primary" : "default"} onClick={() => setActiveTab("users")}>User Behavior</Button>
+            <Button variant={activeTab === "incidents" ? "primary" : "default"} onClick={() => setActiveTab("incidents")}>Critical Incidents</Button>
           </section>
           <section
             id={activeTab === "leaks" ? "leaks" : activeTab === "users" ? "users" : activeTab === "incidents" ? "incidents" : "trends"}
@@ -434,9 +457,9 @@ export default function Page() {
           >
             <h2 style={{ marginBottom: 8 }}>{activeTitle}</h2>
             {detailRows.length === 0 ? (
-              <div style={{ padding: 12, borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0" }}>No rows found for this query.</div>
+              <div className="gg-card" style={{ padding: 12 }}>No rows found for this query.</div>
             ) : (
-              <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "auto", background: "#fff" }}>
+              <div className="gg-table-wrap">
                 {activeTab === "leaks" ? (
                   <div style={{ width: "100%", height: 260, padding: 10 }}>
                     <ResponsiveContainer>
@@ -450,11 +473,11 @@ export default function Page() {
                     </ResponsiveContainer>
                   </div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
-                    <thead style={{ background: "#f9fafb" }}>
+                  <table className="gg-table" style={{ minWidth: 700 }}>
+                    <thead>
                       <tr>
                         {Object.keys(detailRows[0]).map((col) => (
-                          <th key={col} style={{ textAlign: "left", padding: 10, borderBottom: "1px solid #e5e7eb", fontSize: 13 }}>
+                          <th key={col}>
                             {col.replaceAll("_", " ")}
                           </th>
                         ))}
@@ -464,7 +487,7 @@ export default function Page() {
                       {detailRows.map((row, idx) => (
                         <tr key={idx}>
                           {Object.keys(detailRows[0]).map((col) => (
-                            <td key={`${idx}-${col}`} style={{ padding: 10, borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>
+                            <td key={`${idx}-${col}`}>
                               {formatValue(row[col])}
                             </td>
                           ))}
@@ -477,9 +500,9 @@ export default function Page() {
             )}
           </section>
 
-          <section style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: 14 }}>
+          <section className="gg-card" style={{ padding: 14 }}>
             <h3 style={{ marginTop: 0 }}>How this security flow works</h3>
-            <ol style={{ margin: 0, paddingLeft: 18, color: "#374151", lineHeight: 1.6 }}>
+            <ol className="gg-muted" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
               <li>User prompt hits ViperGo proxy.</li>
               <li>Input scanner assigns threat score and may block prompt.</li>
               <li>Allowed traffic streams from LLM and output scanner redacts leaks.</li>
@@ -489,41 +512,7 @@ export default function Page() {
         </section>
       </div>
 
-      {selectedRequest ? (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            right: 0,
-            height: "100vh",
-            width: "min(560px, 95vw)",
-            background: "#fff",
-            borderLeft: "1px solid #e2e8f0",
-            boxShadow: "-8px 0 32px rgba(15,23,42,0.15)",
-            padding: 16,
-            overflow: "auto",
-            zIndex: 1000
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3 style={{ margin: 0 }}>Request Detail</h3>
-            <button onClick={() => setSelectedRequest(null)} style={{ padding: "6px 10px" }}>Close</button>
-          </div>
-          <p style={{ color: "#64748b", fontSize: 13 }}>Full event details and decision context</p>
-          <div style={{ display: "grid", gap: 8 }}>
-            {Object.entries(selectedRequest).map(([k, v]) => (
-              <div key={k} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 8 }}>
-                <div style={{ fontSize: 12, color: "#64748b" }}>{k}</div>
-                <div style={{ fontSize: 14 }}>{formatValue(v)}</div>
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: 12, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 8, padding: 10 }}>
-            <div style={{ fontWeight: 700, marginBottom: 4 }}>Decision Summary</div>
-            <div style={{ fontSize: 14 }}>{decisionReason(selectedRequest)}</div>
-          </div>
-        </div>
-      ) : null}
+      <RequestDetailDrawer selectedRequest={selectedRequest} onClose={() => setSelectedRequest(null)} decisionReason={decisionReason} />
     </main>
   );
 }

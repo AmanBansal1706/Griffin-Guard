@@ -17,7 +17,14 @@ resource "aws_ecs_task_definition" "proxy" {
     portMappings = [{ containerPort = 8080, protocol = "tcp" }]
     environment = [
       { name = "VIPER_LOG_BUCKET", value = var.raw_bucket_name },
-      { name = "VIPER_UPSTREAM_URL", value = var.upstream_url }
+      { name = "VIPER_UPSTREAM_URL", value = var.upstream_url },
+      { name = "VIPER_ENV", value = "production" }
+    ]
+    secrets = [
+      for env_name, arn in var.secret_arns : {
+        name      = env_name
+        valueFrom = arn
+      }
     ]
   }])
 }

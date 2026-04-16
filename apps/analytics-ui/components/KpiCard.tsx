@@ -4,17 +4,23 @@ type KpiCardProps = {
   title: string;
   value: string;
   subtitle?: string;
-  border: string;
-  bg: string;
-  accent: string;
+  tone?: "default" | "danger" | "warn" | "info";
 };
 
-export function KpiCard({ title, value, subtitle, border, bg, accent }: KpiCardProps) {
+export function KpiCard({ title, value, subtitle, tone = "default" }: KpiCardProps) {
+  const toneStyle =
+    tone === "danger"
+      ? { borderColor: "var(--status-danger-bg)" }
+      : tone === "warn"
+        ? { borderColor: "var(--status-warn-bg)" }
+        : tone === "info"
+          ? { borderColor: "var(--accent)" }
+          : undefined;
   return (
-    <article style={{ border: `1px solid ${border}`, borderRadius: 12, padding: 12, background: bg }}>
-      <div style={{ fontSize: 12, color: accent }}>{title}</div>
+    <article className="gg-card" style={{ padding: 12, ...toneStyle }}>
+      <div className="gg-muted" style={{ fontSize: 12 }}>{title}</div>
       <div style={{ fontSize: 28, fontWeight: 800, marginTop: 6 }}>{value}</div>
-      {subtitle ? <div style={{ fontSize: 12, color: accent }}>{subtitle}</div> : null}
+      {subtitle ? <div className="gg-muted" style={{ fontSize: 12 }}>{subtitle}</div> : null}
     </article>
   );
 }

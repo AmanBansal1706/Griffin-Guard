@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"vipergo/apps/viper-proxy/internal/logging"
+	"vipergo/apps/viper-proxy/internal/metrics"
 	"vipergo/apps/viper-proxy/internal/security/input"
 	"vipergo/apps/viper-proxy/internal/security/output"
 )
@@ -33,7 +34,7 @@ func NewGateway(upstream string, classifier *input.Classifier, threshold float64
 		return nil, err
 	}
 	return &Gateway{
-		upstream:        u,
+		upstream: u,
 		client: &http.Client{
 			Timeout: 90 * time.Second,
 			Transport: &http.Transport{
@@ -65,26 +66,36 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	score, scoreErr := g.classifier.Score(r.Context(), string(body))
 	if scoreErr != nil && !g.scannerFailOpen {
+		metrics.RecordScannerFailure()
+		metrics.RecordStatus(http.StatusServiceUnavailable)
+		metrics.RecordRequest(time.Since(start).Milliseconds())
 		http.Error(w, "scanner unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if score > g.threshold {
+		metrics.RecordBlocked()
+		metrics.RecordStatus(http.StatusForbidden)
 		http.Error(w, input.ExplainDecision(score, g.threshold), http.StatusForbidden)
 		event := logging.Event{
-			Timestamp:    time.Now().UTC(),
-			RequestID:    requestID,
-			Method:       r.Method,
-			Path:         r.URL.Path,
-			Upstream:     g.upstream.String(),
-			InputScore:   score,
-			InputBlocked: true,
-			Action:       "block_input",
-			StatusCode:   http.StatusForbidden,
-			LatencyMs:    time.Since(start).Milliseconds(),
-			PolicyVersion: "v5.0",
+			Timestamp:      time.Now().UTC(),
+			RequestID:      requestID,
+			Method:         r.Method,
+			Path:           r.URL.Path,
+			Upstream:       g.upstream.String(),
+			InputScore:     score,
+			InputBlocked:   true,
+			Action:         "block_input",
+			StatusCode:     http.StatusForbidden,
+			LatencyMs:      time.Since(start).Milliseconds(),
+			PolicyVersion:  "v5.0",
+			ReasonCode:     "input_threat_threshold_exceeded",
+			RuleID:         "input-score-threshold",
+			DecisionSource: "input-scanner",
 		}
 		g.logQueue.Enqueue(event)
 		logging.PublishLiveEvent(event)
+		metrics.RecordAction("block_input")
+		metrics.RecordRequest(time.Since(start).Milliseconds())
 		return
 	}
 
@@ -101,6 +112,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := g.client.Do(upstreamReq)
 	if err != nil {
+		metrics.RecordUpstreamFailure()
+		metrics.RecordStatus(http.StatusBadGateway)
+		metrics.RecordRequest(time.Since(start).Milliseconds())
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		return
 	}
@@ -115,6 +129,8 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	streamRes, streamErr := output.InterceptAndWrite(w, resp.Body, g.terminateOnLeak)
 	if streamErr != nil {
 		if !errors.Is(streamErr, context.Canceled) {
+			metrics.RecordStatus(http.StatusBadGateway)
+			metrics.RecordRequest(time.Since(start).Milliseconds())
 			http.Error(w, "stream interception failed", http.StatusBadGateway)
 		}
 		return
@@ -126,21 +142,41 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else if streamRes.AnyLeakSeen {
 		action = "redact_stream"
 	}
+	if streamRes.AnyLeakSeen {
+		metrics.RecordOutputLeak(streamRes.Terminated)
+	}
 	event := logging.Event{
-		Timestamp:     time.Now().UTC(),
-		RequestID:     requestID,
-		Method:        r.Method,
-		Path:          r.URL.Path,
-		Upstream:      g.upstream.String(),
-		InputScore:    score,
-		InputBlocked:  false,
-		OutputLeak:    streamRes.AnyLeakSeen,
-		LeakTypes:     streamRes.LeakTypes,
-		Action:        action,
-		StatusCode:    resp.StatusCode,
-		LatencyMs:     time.Since(start).Milliseconds(),
-		PolicyVersion: "v5.0",
+		Timestamp:      time.Now().UTC(),
+		RequestID:      requestID,
+		Method:         r.Method,
+		Path:           r.URL.Path,
+		Upstream:       g.upstream.String(),
+		InputScore:     score,
+		InputBlocked:   false,
+		OutputLeak:     streamRes.AnyLeakSeen,
+		LeakTypes:      streamRes.LeakTypes,
+		Action:         action,
+		StatusCode:     resp.StatusCode,
+		LatencyMs:      time.Since(start).Milliseconds(),
+		PolicyVersion:  "v5.0",
+		ReasonCode:     reasonCode(action),
+		RuleID:         "output-stream-dlp",
+		DecisionSource: "output-stream-scanner",
 	}
 	g.logQueue.Enqueue(event)
 	logging.PublishLiveEvent(event)
+	metrics.RecordAction(action)
+	metrics.RecordStatus(resp.StatusCode)
+	metrics.RecordRequest(time.Since(start).Milliseconds())
+}
+
+func reasonCode(action string) string {
+	switch action {
+	case "terminate_stream":
+		return "output_sensitive_leak_terminated"
+	case "redact_stream":
+		return "output_sensitive_leak_redacted"
+	default:
+		return "policy_allow"
+	}
 }

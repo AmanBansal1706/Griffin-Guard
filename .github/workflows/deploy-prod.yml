@@ -1,6 +1,13 @@
 name: Deploy Prod
 on:
   workflow_dispatch:
+    inputs:
+      healthcheck_url:
+        description: "Public health endpoint URL for post-apply checks"
+        required: true
+      expected_version:
+        description: "Expected service version in /healthz/public (optional)"
+        required: false
 
 jobs:
   plan:
@@ -28,3 +35,23 @@ jobs:
           path: infra/terraform/environments/prod
       - run: terraform -chdir=infra/terraform/environments/prod init
       - run: terraform -chdir=infra/terraform/environments/prod apply tfplan
+      - name: Post-apply health verification
+        env:
+          HEALTHCHECK_URL: ${{ github.event.inputs.healthcheck_url }}
+          EXPECTED_VERSION: ${{ github.event.inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          echo "Checking ${HEALTHCHECK_URL}"
+          for attempt in $(seq 1 20); do
+            payload="$(curl --silent --show-error --fail --max-time 5 "${HEALTHCHECK_URL}")" && break
+            echo "Attempt ${attempt} failed; retrying in 10s..."
+            sleep 10
+          done
+          if [ -z "${payload:-}" ]; then
+            echo "Health check failed after retries"
+            exit 1
+          fi
+          echo "${payload}" | jq -e '.degraded == false' >/dev/null
+          if [ -n "${EXPECTED_VERSION}" ]; then
+            echo "${payload}" | jq -e --arg expected "${EXPECTED_VERSION}" '.version == $expected' >/dev/null
+          fi

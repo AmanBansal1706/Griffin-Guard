@@ -18,6 +18,9 @@ type Event struct {
 	StatusCode     int               `json:"status_code"`
 	LatencyMs      int64             `json:"latency_ms"`
 	PolicyVersion  string            `json:"policy_version"`
+	ReasonCode     string            `json:"reason_code,omitempty"`
+	RuleID         string            `json:"rule_id,omitempty"`
+	DecisionSource string            `json:"decision_source,omitempty"`
 	FailureMode    string            `json:"failure_mode,omitempty"`
 	AdditionalData map[string]string `json:"additional_data,omitempty"`
 }

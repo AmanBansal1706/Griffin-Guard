@@ -29,3 +29,8 @@ variable "subnet_ids" {
 variable "security_group_ids" {
   type = list(string)
 }
+
+variable "secret_arns" {
+  type    = map(string)
+  default = {}
+}

@@ -1,12 +1,14 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"time"
 )
 
 type Config struct {
+	Environment           string
 	ListenAddr            string
 	UpstreamURL           string
 	ReadTimeout           time.Duration
@@ -21,13 +23,17 @@ type Config struct {
 	WALPath               string
 	ModelPath             string
 	ONNXEndpoint          string
+	AllowDebugEvents      bool
+	DebugEventsToken      string
 	ScannerFailOpen       bool
 	LoggerFailOpen        bool
 	StreamTerminateOnLeak bool
+	DebugEventsMax        int
 }
 
 func Load() Config {
 	return Config{
+		Environment:           get("VIPER_ENV", "dev"),
 		ListenAddr:            get("VIPER_LISTEN_ADDR", ":8080"),
 		UpstreamURL:           get("VIPER_UPSTREAM_URL", "https://api.openai.com"),
 		ReadTimeout:           getDuration("VIPER_READ_TIMEOUT", 15*time.Second),
@@ -42,10 +48,48 @@ func Load() Config {
 		WALPath:               get("VIPER_WAL_PATH", "./var/logs/viper.wal"),
 		ModelPath:             get("VIPER_MODEL_PATH", "./models/distilbert.onnx"),
 		ONNXEndpoint:          get("VIPER_ONNX_ENDPOINT", ""),
-		ScannerFailOpen:       getBool("VIPER_SCANNER_FAIL_OPEN", true),
-		LoggerFailOpen:        getBool("VIPER_LOGGER_FAIL_OPEN", true),
+		AllowDebugEvents:      getBool("VIPER_ALLOW_DEBUG_EVENTS", false),
+		DebugEventsToken:      get("VIPER_DEBUG_EVENTS_TOKEN", ""),
+		ScannerFailOpen:       getBool("VIPER_SCANNER_FAIL_OPEN", false),
+		LoggerFailOpen:        getBool("VIPER_LOGGER_FAIL_OPEN", false),
 		StreamTerminateOnLeak: getBool("VIPER_STREAM_TERMINATE_ON_LEAK", false),
+		DebugEventsMax:        getInt("VIPER_DEBUG_EVENTS_MAX", 500),
 	}
+}
+
+func (c Config) IsProduction() bool {
+	return c.Environment == "prod" || c.Environment == "production"
+}
+
+func (c Config) Validate() error {
+	if c.UpstreamURL == "" {
+		return fmt.Errorf("VIPER_UPSTREAM_URL is required")
+	}
+	if c.LogBucket == "" {
+		return fmt.Errorf("VIPER_LOG_BUCKET is required")
+	}
+	if c.LogRegion == "" {
+		return fmt.Errorf("VIPER_LOG_REGION is required")
+	}
+	if c.RequestMaxBytes <= 0 {
+		return fmt.Errorf("VIPER_REQUEST_MAX_BYTES must be > 0")
+	}
+	if c.LogWorkers <= 0 || c.LogQueueSize <= 0 {
+		return fmt.Errorf("VIPER_LOG_WORKERS and VIPER_LOG_QUEUE_SIZE must be > 0")
+	}
+	if c.ThreatScoreThreshold < 0 || c.ThreatScoreThreshold > 1 {
+		return fmt.Errorf("VIPER_THREAT_SCORE_THRESHOLD must be between 0 and 1")
+	}
+	if c.DebugEventsMax <= 0 {
+		return fmt.Errorf("VIPER_DEBUG_EVENTS_MAX must be > 0")
+	}
+	if c.AllowDebugEvents && c.DebugEventsToken == "" {
+		return fmt.Errorf("VIPER_DEBUG_EVENTS_TOKEN is required when VIPER_ALLOW_DEBUG_EVENTS=true")
+	}
+	if c.IsProduction() && c.AllowDebugEvents {
+		return fmt.Errorf("VIPER_ALLOW_DEBUG_EVENTS must be false in production")
+	}
+	return nil
 }
 
 func get(k, def string) string {

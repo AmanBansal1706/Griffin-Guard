@@ -1,7 +1,7 @@
 version: v5.0
 input:
   threat_score_threshold: 0.85
-  fail_open: true
+  fail_open: false
 output:
   terminate_on_leak: false
   detectors:
@@ -12,4 +12,4 @@ output:
 logging:
   queue_size: 1000
   workers: 20
-  fail_open: true
+  fail_open: false

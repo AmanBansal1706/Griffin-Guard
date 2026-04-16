@@ -44,6 +44,7 @@ func (q *Queue) Enqueue(e Event) {
 	select {
 	case q.ch <- e:
 	default:
+		atomic.AddUint64(&q.dropped, 1)
 		_ = q.wal.Append(e)
 	}
 }
@@ -66,6 +67,18 @@ func (q *Queue) worker() {
 
 func (q *Queue) Healthy() bool {
 	return q.cb.Allow() || len(q.ch) < cap(q.ch)
+}
+
+func (q *Queue) QueueDepth() int {
+	return len(q.ch)
+}
+
+func (q *Queue) QueueCapacity() int {
+	return cap(q.ch)
+}
+
+func (q *Queue) DroppedCount() uint64 {
+	return atomic.LoadUint64(&q.dropped)
 }
 
 func (q *Queue) Close() {

@@ -6,10 +6,13 @@ import (
 )
 
 type Status struct {
-	ProxyReady   bool `json:"proxy_ready"`
-	ScannerReady bool `json:"scanner_ready"`
-	LoggerReady  bool `json:"logger_ready"`
-	Version      string `json:"version"`
+	ProxyReady    bool   `json:"proxy_ready"`
+	ScannerReady  bool   `json:"scanner_ready"`
+	LoggerReady   bool   `json:"logger_ready"`
+	Degraded      bool   `json:"degraded"`
+	QueueDepth    int    `json:"queue_depth,omitempty"`
+	QueueCapacity int    `json:"queue_capacity,omitempty"`
+	Version       string `json:"version"`
 }
 
 func Handler(statusFn func() Status) http.Handler {
