@@ -85,7 +85,8 @@ export default function Page() {
   const [lastRefreshAt, setLastRefreshAt] = useState<string>("never");
   const isRefreshingRef = useRef(false);
   const dataUrl = useMemo(() => process.env.NEXT_PUBLIC_CURATED_PARQUET_URL || "", []);
-  const liveEventsUrl = useMemo(() => process.env.NEXT_PUBLIC_PROXY_EVENTS_URL || "http://localhost:18080/debug/events", []);
+  const liveEventsUrl = useMemo(() => process.env.NEXT_PUBLIC_PROXY_EVENTS_URL || "http://localhost:8080/debug/events", []);
+  const liveEventsToken = useMemo(() => process.env.NEXT_PUBLIC_PROXY_EVENTS_TOKEN || "", []);
   const overviewRows = useMemo(() => parseRows(overview), [overview]);
   const detailRows = useMemo(() => parseRows(results), [results]);
   const decisionRows = useMemo(() => parseRows(decisionFeed), [decisionFeed]);
@@ -182,7 +183,7 @@ export default function Page() {
       try {
         const { conn } = await initDB();
         await loadEventData(conn, dataUrl || undefined);
-        const source = await syncLiveEvents(conn, liveEventsUrl);
+        const source = await syncLiveEvents(conn, liveEventsUrl, liveEventsToken);
         setDataSourceState(source);
         setLastRefreshAt(new Date().toLocaleTimeString());
         const overviewResult = await conn.query(queryTemplates.overview);
@@ -208,7 +209,7 @@ export default function Page() {
         isRefreshingRef.current = false;
       }
     })();
-  }, [activeTab, dataUrl, liveEventsUrl, refreshTick]);
+  }, [activeTab, dataUrl, liveEventsToken, liveEventsUrl, refreshTick]);
 
   useEffect(() => {
     const t = setInterval(() => {

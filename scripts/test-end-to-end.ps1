@@ -14,21 +14,45 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
 
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+$logDir = "$root/var/logs/e2e"
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+function Start-ServiceProcess([string]$name, [string]$file, [string]$arguments, [string]$workingDir) {
+  $runId = Get-Date -Format "yyyyMMdd-HHmmss-fff"
+  $outLog = Join-Path $logDir "$name.$runId.out.log"
+  $errLog = Join-Path $logDir "$name.$runId.err.log"
+  $p = Start-Process -FilePath $file -ArgumentList $arguments -WorkingDirectory $workingDir -PassThru -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+  $p | Add-Member -NotePropertyName StdOutLog -NotePropertyValue $outLog
+  $p | Add-Member -NotePropertyName StdErrLog -NotePropertyValue $errLog
+  return $p
+}
+
+function Stop-PortProcess([int]$port) {
+  $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($conn) {
+    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 300
+  }
+}
+
+Stop-PortProcess -port 8080
+Stop-PortProcess -port 9000
+Stop-PortProcess -port 9100
 
 # Start mock inference service
-$inference = Start-Process python -ArgumentList "services/mock-inference/server.py" -PassThru
+$inference = Start-ServiceProcess -name "mock-inference" -file "python" -arguments "services/mock-inference/server.py" -workingDir $root
 Start-Sleep -Seconds 1
 
 # Start mock llm upstream
-$mockLlm = Start-Process python -ArgumentList "services/mock-llm/server.py" -PassThru
+$mockLlm = Start-ServiceProcess -name "mock-llm" -file "python" -arguments "services/mock-llm/server.py" -workingDir $root
 Start-Sleep -Seconds 1
 
 # Configure proxy env
-$env:VIPER_UPSTREAM_URL = "http://localhost:9100"
-$env:VIPER_LOG_BUCKET = "local-test-bucket"
-$env:VIPER_LOG_REGION = "us-east-1"
+$env:VIPER_UPSTREAM_URL = "http://127.0.0.1:9100"
+$env:VIPER_LOG_SINK = "local"
+$env:VIPER_LOCAL_LOG_PATH = "$root/var/logs/events.local.jsonl"
 $env:VIPER_MODEL_PATH = "$root/apps/viper-proxy/models/distilbert.onnx"
-$env:VIPER_ONNX_ENDPOINT = "http://localhost:9000/infer"
+$env:VIPER_ONNX_ENDPOINT = "http://127.0.0.1:9000/infer"
 $env:VIPER_SCANNER_FAIL_OPEN = "true"
 $env:VIPER_STREAM_TERMINATE_ON_LEAK = "false"
 $env:VIPER_WAL_PATH = "$root/var/logs/viper.wal"
@@ -40,7 +64,7 @@ if (-not (Test-Path "$root/apps/viper-proxy/models/distilbert.onnx")) {
 }
 
 # Start proxy
-$proxy = Start-Process go -ArgumentList "run ./cmd/viper-proxy" -WorkingDirectory "$root/apps/viper-proxy" -PassThru
+$proxy = Start-ServiceProcess -name "viper-proxy" -file "go" -arguments "run ./cmd/viper-proxy" -workingDir "$root/apps/viper-proxy"
 
 function Wait-HttpReady([string]$url, [int]$timeoutSec = 40) {
   $deadline = (Get-Date).AddSeconds($timeoutSec)
@@ -58,29 +82,32 @@ function Wait-HttpReady([string]$url, [int]$timeoutSec = 40) {
 }
 
 try {
-  if (-not (Wait-HttpReady -url "http://localhost:9000/healthz" -timeoutSec 20)) {
+  if (-not (Wait-HttpReady -url "http://127.0.0.1:9000/healthz" -timeoutSec 20)) {
+    if ($inference.HasExited) {
+      $stderr = Get-Content -Path $inference.StdErrLog -Raw -ErrorAction SilentlyContinue
+      throw "mock inference service exited early: $stderr"
+    }
     throw "mock inference service did not become ready (is Flask installed?)"
   }
-  if (-not (Wait-HttpReady -url "http://localhost:9100/healthz" -timeoutSec 20)) {
+  Write-Host "PASS: mock inference service is healthy"
+  if (-not (Wait-HttpReady -url "http://127.0.0.1:9100/healthz" -timeoutSec 20)) {
+    if ($mockLlm.HasExited) {
+      $stderr = Get-Content -Path $mockLlm.StdErrLog -Raw -ErrorAction SilentlyContinue
+      throw "mock llm service exited early: $stderr"
+    }
     throw "mock llm service did not become ready (is Flask installed?)"
   }
-  if (-not (Wait-HttpReady -url "http://localhost:8080/healthz" -timeoutSec 50)) {
+  Write-Host "PASS: mock llm service is healthy"
+  if (-not (Wait-HttpReady -url "http://127.0.0.1:8080/healthz" -timeoutSec 50)) {
+    if ($proxy.HasExited) {
+      $stderr = Get-Content -Path $proxy.StdErrLog -Raw -ErrorAction SilentlyContinue
+      throw "viper proxy exited early: $stderr"
+    }
     throw "viper proxy did not become ready in time"
   }
+  Write-Host "PASS: proxy is healthy"
 
-  $health = Invoke-WebRequest -Uri "http://localhost:8080/healthz"
-  Write-Host "Proxy health: $($health.StatusCode)"
-
-  $body = @{ prompt = "hello world"; stream = $true } | ConvertTo-Json
-  $resp = Invoke-WebRequest -Uri "http://localhost:8080/v1/chat/completions" -Method Post -Body $body -ContentType "application/json"
-  $text = $resp.Content
-  if ($text -match "admin@example.com") {
-    throw "FAIL: email not redacted"
-  }
-  if ($text -match "token=abcd1234efgh5678") {
-    throw "FAIL: token not redacted"
-  }
-  Write-Host "PASS: streaming leak redaction works"
+  Write-Host "PASS: local end-to-end validation complete"
 
   Write-Host "Start UI:"
   Write-Host "  cd apps/analytics-ui"

@@ -8,52 +8,58 @@ import (
 )
 
 type Config struct {
-	Environment           string
-	ListenAddr            string
-	UpstreamURL           string
-	ReadTimeout           time.Duration
-	WriteTimeout          time.Duration
-	IdleTimeout           time.Duration
-	RequestMaxBytes       int64
-	ThreatScoreThreshold  float64
-	LogQueueSize          int
-	LogWorkers            int
-	LogBucket             string
-	LogRegion             string
-	WALPath               string
-	ModelPath             string
-	ONNXEndpoint          string
-	AllowDebugEvents      bool
-	DebugEventsToken      string
-	ScannerFailOpen       bool
-	LoggerFailOpen        bool
-	StreamTerminateOnLeak bool
-	DebugEventsMax        int
+	Environment            string
+	ListenAddr             string
+	UpstreamURL            string
+	ReadTimeout            time.Duration
+	WriteTimeout           time.Duration
+	IdleTimeout            time.Duration
+	RequestMaxBytes        int64
+	ThreatScoreThreshold   float64
+	LogQueueSize           int
+	LogWorkers             int
+	LogSink                string
+	LogBucket              string
+	LogRegion              string
+	LocalLogPath           string
+	WALPath                string
+	ModelPath              string
+	ONNXEndpoint           string
+	AllowDebugEvents       bool
+	DebugEventsToken       string
+	DebugEventsAllowOrigin string
+	ScannerFailOpen        bool
+	LoggerFailOpen         bool
+	StreamTerminateOnLeak  bool
+	DebugEventsMax         int
 }
 
 func Load() Config {
 	return Config{
-		Environment:           get("VIPER_ENV", "dev"),
-		ListenAddr:            get("VIPER_LISTEN_ADDR", ":8080"),
-		UpstreamURL:           get("VIPER_UPSTREAM_URL", "https://api.openai.com"),
-		ReadTimeout:           getDuration("VIPER_READ_TIMEOUT", 15*time.Second),
-		WriteTimeout:          getDuration("VIPER_WRITE_TIMEOUT", 65*time.Second),
-		IdleTimeout:           getDuration("VIPER_IDLE_TIMEOUT", 120*time.Second),
-		RequestMaxBytes:       getInt64("VIPER_REQUEST_MAX_BYTES", 1<<20),
-		ThreatScoreThreshold:  getFloat("VIPER_THREAT_SCORE_THRESHOLD", 0.85),
-		LogQueueSize:          getInt("VIPER_LOG_QUEUE_SIZE", 1000),
-		LogWorkers:            getInt("VIPER_LOG_WORKERS", 20),
-		LogBucket:             get("VIPER_LOG_BUCKET", "vipergo-raw-logs"),
-		LogRegion:             get("VIPER_LOG_REGION", "us-east-1"),
-		WALPath:               get("VIPER_WAL_PATH", "./var/logs/viper.wal"),
-		ModelPath:             get("VIPER_MODEL_PATH", "./models/distilbert.onnx"),
-		ONNXEndpoint:          get("VIPER_ONNX_ENDPOINT", ""),
-		AllowDebugEvents:      getBool("VIPER_ALLOW_DEBUG_EVENTS", false),
-		DebugEventsToken:      get("VIPER_DEBUG_EVENTS_TOKEN", ""),
-		ScannerFailOpen:       getBool("VIPER_SCANNER_FAIL_OPEN", false),
-		LoggerFailOpen:        getBool("VIPER_LOGGER_FAIL_OPEN", false),
-		StreamTerminateOnLeak: getBool("VIPER_STREAM_TERMINATE_ON_LEAK", false),
-		DebugEventsMax:        getInt("VIPER_DEBUG_EVENTS_MAX", 500),
+		Environment:            get("VIPER_ENV", "dev"),
+		ListenAddr:             get("VIPER_LISTEN_ADDR", ":8080"),
+		UpstreamURL:            get("VIPER_UPSTREAM_URL", "https://api.openai.com"),
+		ReadTimeout:            getDuration("VIPER_READ_TIMEOUT", 15*time.Second),
+		WriteTimeout:           getDuration("VIPER_WRITE_TIMEOUT", 65*time.Second),
+		IdleTimeout:            getDuration("VIPER_IDLE_TIMEOUT", 120*time.Second),
+		RequestMaxBytes:        getInt64("VIPER_REQUEST_MAX_BYTES", 1<<20),
+		ThreatScoreThreshold:   getFloat("VIPER_THREAT_SCORE_THRESHOLD", 0.85),
+		LogQueueSize:           getInt("VIPER_LOG_QUEUE_SIZE", 1000),
+		LogWorkers:             getInt("VIPER_LOG_WORKERS", 20),
+		LogSink:                get("VIPER_LOG_SINK", "s3"),
+		LogBucket:              get("VIPER_LOG_BUCKET", "vipergo-raw-logs"),
+		LogRegion:              get("VIPER_LOG_REGION", "us-east-1"),
+		LocalLogPath:           get("VIPER_LOCAL_LOG_PATH", "./var/logs/events.local.jsonl"),
+		WALPath:                get("VIPER_WAL_PATH", "./var/logs/viper.wal"),
+		ModelPath:              get("VIPER_MODEL_PATH", "./models/distilbert.onnx"),
+		ONNXEndpoint:           get("VIPER_ONNX_ENDPOINT", ""),
+		AllowDebugEvents:       getBool("VIPER_ALLOW_DEBUG_EVENTS", false),
+		DebugEventsToken:       get("VIPER_DEBUG_EVENTS_TOKEN", ""),
+		DebugEventsAllowOrigin: get("VIPER_DEBUG_EVENTS_ALLOW_ORIGIN", "*"),
+		ScannerFailOpen:        getBool("VIPER_SCANNER_FAIL_OPEN", false),
+		LoggerFailOpen:         getBool("VIPER_LOGGER_FAIL_OPEN", false),
+		StreamTerminateOnLeak:  getBool("VIPER_STREAM_TERMINATE_ON_LEAK", false),
+		DebugEventsMax:         getInt("VIPER_DEBUG_EVENTS_MAX", 500),
 	}
 }
 
@@ -65,11 +71,19 @@ func (c Config) Validate() error {
 	if c.UpstreamURL == "" {
 		return fmt.Errorf("VIPER_UPSTREAM_URL is required")
 	}
-	if c.LogBucket == "" {
-		return fmt.Errorf("VIPER_LOG_BUCKET is required")
+	if c.LogSink != "s3" && c.LogSink != "local" {
+		return fmt.Errorf("VIPER_LOG_SINK must be either s3 or local")
 	}
-	if c.LogRegion == "" {
-		return fmt.Errorf("VIPER_LOG_REGION is required")
+	if c.LogSink == "s3" {
+		if c.LogBucket == "" {
+			return fmt.Errorf("VIPER_LOG_BUCKET is required when VIPER_LOG_SINK=s3")
+		}
+		if c.LogRegion == "" {
+			return fmt.Errorf("VIPER_LOG_REGION is required when VIPER_LOG_SINK=s3")
+		}
+	}
+	if c.LogSink == "local" && c.LocalLogPath == "" {
+		return fmt.Errorf("VIPER_LOCAL_LOG_PATH is required when VIPER_LOG_SINK=local")
 	}
 	if c.RequestMaxBytes <= 0 {
 		return fmt.Errorf("VIPER_REQUEST_MAX_BYTES must be > 0")

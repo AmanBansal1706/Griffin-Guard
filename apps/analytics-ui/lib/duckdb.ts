@@ -87,10 +87,14 @@ function esc(v: string): string {
   return v.replaceAll("'", "''");
 }
 
-export async function syncLiveEvents(conn: AsyncDuckDBConnection, endpoint: string): Promise<"live" | "stale"> {
+export async function syncLiveEvents(conn: AsyncDuckDBConnection, endpoint: string, debugToken?: string): Promise<"live" | "stale"> {
   let res: Response;
   try {
-    res = await fetch(endpoint, { cache: "no-store" });
+    const headers: HeadersInit = {};
+    if (debugToken) {
+      headers["X-Debug-Token"] = debugToken;
+    }
+    res = await fetch(endpoint, { cache: "no-store", headers });
   } catch {
     // Proxy live endpoint unavailable; keep dashboard usable with local/parquet data.
     return "stale";

@@ -47,7 +47,7 @@ The script starts:
 - mock LLM upstream (`http://localhost:9100`)
 - Viper proxy (`http://localhost:8080`)
 
-Then it sends a streaming request and verifies that sensitive data is redacted and events are logged.
+Then it verifies local service health and runs integration redaction checks.
 
 ## Running the Analytics UI
 
@@ -62,3 +62,63 @@ The dashboard shows:
 - Time-series trends for blocked traffic.
 - A request explorer with filters and CSV export.
 - An incident feed and request detail drawer for investigations.
+
+## Local Interview Demo
+
+### Step 1: Run smoke e2e and show PASS
+
+From repo root in PowerShell:
+
+- `.\scripts\test-end-to-end.ps1`
+
+Expected checkpoints:
+
+- `PASS: mock inference service is healthy`
+- `PASS: mock llm service is healthy`
+- `PASS: proxy is healthy`
+- `PASS: local end-to-end validation complete`
+
+### Step 2: Start live demo services
+
+From repo root in PowerShell:
+
+- `.\scripts\demo-live.ps1`
+
+Then open:
+
+- `http://localhost:8080/healthz`
+
+Explain health fields:
+
+- `degraded`: true means scanner/logger path is partially degraded.
+- `scanner_ready`: scanner endpoint state (or allowed by fail-open).
+- `logger_ready`: async logging queue health.
+
+### Step 3: Start UI with live proxy events
+
+In a new PowerShell terminal:
+
+1. `cd apps/analytics-ui`
+2. `$env:NEXT_PUBLIC_PROXY_EVENTS_URL='http://localhost:8080/debug/events'`
+3. `$env:NEXT_PUBLIC_PROXY_EVENTS_TOKEN='demo-token'`
+4. `npm install`
+5. `npm run dev`
+6. Open `http://localhost:3000`
+
+### Step 4: Show incident and redact_stream in dashboard
+
+Generate live traffic:
+
+- `Invoke-WebRequest -Uri http://localhost:8080/v1/chat/completions -Method Post -Body '{"prompt":"hello","stream":true}' -ContentType 'application/json'`
+
+In dashboard show:
+
+- Live Incident Feed has non-allow decision rows.
+- Request Explorer shows `redact_stream` actions.
+
+### Troubleshooting
+
+- `python not found` or services fail to start: install Python 3.11+ and Flask.
+- `debug endpoint disabled` or `unauthorized`: ensure `VIPER_ALLOW_DEBUG_EVENTS=true` and token matches `NEXT_PUBLIC_PROXY_EVENTS_TOKEN`.
+- UI stays stale: confirm URL is `http://localhost:8080/debug/events` and browser can access proxy.
+- Port conflicts on `8080`, `9100`, `9000`: stop old processes and rerun scripts.

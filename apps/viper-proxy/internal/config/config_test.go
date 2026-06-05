@@ -19,3 +19,22 @@ func TestValidateRejectsDebugInProd(t *testing.T) {
 		t.Fatalf("expected validation error for debug events in production")
 	}
 }
+
+func TestValidateAllowsLocalLogSinkWithoutS3(t *testing.T) {
+	cfg := Load()
+	cfg.LogSink = "local"
+	cfg.LogBucket = ""
+	cfg.LogRegion = ""
+	cfg.LocalLogPath = "./var/logs/events.local.jsonl"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("expected local log sink validation to pass, got %v", err)
+	}
+}
+
+func TestValidateRejectsUnknownLogSink(t *testing.T) {
+	cfg := Load()
+	cfg.LogSink = "stdout"
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("expected validation error for unknown log sink")
+	}
+}
